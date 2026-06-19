@@ -217,9 +217,19 @@ export default function Results({ scores, onRetry }) {
                 {mintState === "error" && (
                   <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3">
                     <p className="text-red-400 text-sm">{errorMsg}</p>
+                    {errorMsg.includes("devnet SOL") && (
+                      <a
+                        href="https://faucet.solana.com"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block mt-2 text-yellow-400 text-xs underline"
+                      >
+                        → Get free devnet SOL at faucet.solana.com ↗
+                      </a>
+                    )}
                     <button
                       onClick={() => setMintState("idle")}
-                      className="text-red-400 text-xs underline mt-1 cursor-pointer"
+                      className="block text-red-400 text-xs underline mt-2 cursor-pointer"
                     >
                       Try again
                     </button>

@@ -1,39 +1,28 @@
 import { Connection, clusterApiUrl } from "@solana/web3.js";
-import {
-  Metaplex,
-  walletAdapterIdentity,
-  irysStorage,
-  toMetaplexFile,
-} from "@metaplex-foundation/js";
+import { Metaplex, walletAdapterIdentity } from "@metaplex-foundation/js";
 
 export async function mintNFT({ player, score, imageBlob, publicKey, wallet }) {
   const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
 
-  const metaplex = Metaplex.make(connection)
-    .use(walletAdapterIdentity(wallet.adapter))
-    .use(
-      irysStorage({
-        address: "https://devnet.irys.xyz",
-        providerUrl: clusterApiUrl("devnet"),
-        timeout: 60000,
-      })
+  // Check wallet has enough SOL (needs ~0.015 SOL for mint)
+  const balance = await connection.getBalance(publicKey);
+  if (balance < 15_000_000) {
+    throw new Error(
+      `Not enough devnet SOL. You have ${(balance / 1e9).toFixed(4)} SOL — need ~0.015. Get free SOL at faucet.solana.com`
     );
+  }
 
-  // Convert blob to Metaplex file
+  // Convert canvas image to base64 data URL (no external upload needed)
   const ab = await imageBlob.arrayBuffer();
-  const imageMetaplexFile = toMetaplexFile(new Uint8Array(ab), "player-card.png", {
-    contentType: "image/png",
-  });
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(ab)));
+  const imageDataUri = `data:image/png;base64,${base64}`;
 
-  // Upload image
-  const imageUri = await metaplex.storage().upload(imageMetaplexFile);
-
-  // Build metadata
+  // Build metadata object
   const metadata = {
     name: `World Cup Vibe: ${player.name}`,
     symbol: "WCVIBE",
     description: player.description,
-    image: imageUri,
+    image: imageDataUri,
     attributes: [
       { trait_type: "Player", value: player.name },
       { trait_type: "Country", value: player.country },
@@ -42,20 +31,41 @@ export async function mintNFT({ player, score, imageBlob, publicKey, wallet }) {
       { trait_type: "Energy Score", value: String(score) },
     ],
     properties: {
-      files: [{ uri: imageUri, type: "image/png" }],
+      files: [{ uri: imageDataUri, type: "image/png" }],
       category: "image",
     },
   };
 
-  const { uri } = await metaplex.nfts().uploadMetadata(metadata);
+  // Upload metadata JSON to a free public host (no auth, no SOL needed)
+  let metadataUri;
+  try {
+    const res = await fetch("https://api.npoint.io/json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(metadata),
+    });
+    if (!res.ok) throw new Error("npoint upload failed");
+    const { id } = await res.json();
+    metadataUri = `https://api.npoint.io/${id}`;
+  } catch {
+    // Fallback: encode metadata as a data URI
+    const metaBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(metadata))));
+    metadataUri = `data:application/json;base64,${metaBase64}`;
+  }
 
-  const { nft } = await metaplex.nfts().create({
-    uri,
+  // Mint the NFT on Solana devnet
+  const metaplex = Metaplex.make(connection).use(
+    walletAdapterIdentity(wallet.adapter)
+  );
+
+  const { nft, response } = await metaplex.nfts().create({
+    uri: metadataUri,
     name: `World Cup Vibe: ${player.name}`,
     symbol: "WCVIBE",
     sellerFeeBasisPoints: 0,
     isMutable: true,
   });
 
-  return nft.address.toBase58();
+  // Return the transaction signature for the Explorer link
+  return response.signature;
 }
