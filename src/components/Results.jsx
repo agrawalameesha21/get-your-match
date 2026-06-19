@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { players, matchPlayer, calcScore } from "../data/quiz";
-import { drawPlayerCard, canvasToBlob } from "../utils/playerCard";
+import { drawPlayerCard } from "../utils/playerCard";
 import { mintNFT } from "../utils/mintNFT";
 
 export default function Results({ scores, onRetry }) {
@@ -31,8 +31,7 @@ export default function Results({ scores, onRetry }) {
     setMintState("minting");
     setErrorMsg("");
     try {
-      const blob = await canvasToBlob(canvasRef.current);
-      const sig = await mintNFT({ player, score, imageBlob: blob, publicKey, wallet });
+      const sig = await mintNFT({ player, score, publicKey, wallet });
       setTxSig(sig);
       setMintState("success");
     } catch (err) {

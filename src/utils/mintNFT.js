@@ -1,23 +1,63 @@
 import { Connection, clusterApiUrl } from "@solana/web3.js";
 import { Metaplex, walletAdapterIdentity } from "@metaplex-foundation/js";
 
-// Safe base64 encode that won't stack-overflow on large arrays
-function uint8ToBase64(bytes) {
-  let binary = "";
-  const chunkSize = 8192;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
+// Upload metadata JSON to a free public JSON store and return a short HTTPS URL.
+// Metaplex Token Metadata program has a 200-char URI limit — data URIs won't fit.
+async function uploadMetadataJson(metadata) {
+  // Try jsonblob.com — free, no auth, returns a short URL
+  try {
+    const res = await fetch("https://jsonblob.com/api/jsonBlob", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(metadata),
+    });
+    if (res.ok) {
+      // URL is in the Location header e.g. https://jsonblob.com/api/jsonBlob/123
+      const location = res.headers.get("Location");
+      if (location) return location;
+    }
+  } catch (_) {}
+
+  // Fallback: jsonkeeper.com
+  try {
+    const res = await fetch("https://jsonkeeper.com/b/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(metadata),
+    });
+    if (res.ok) {
+      const { id } = await res.json();
+      if (id) return `https://jsonkeeper.com/b/${id}`;
+    }
+  } catch (_) {}
+
+  throw new Error(
+    "Could not host NFT metadata. Check your internet connection and try again."
+  );
 }
 
-// Build a metadata data URI — stored directly on-chain, no upload service needed
-function buildMetadataDataUri(player, score, imageDataUri) {
+export async function mintNFT({ player, score, publicKey, wallet }) {
+  const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
+
+  // Check wallet has enough devnet SOL (~0.015 SOL needed)
+  const balance = await connection.getBalance(publicKey);
+  if (balance < 15_000_000) {
+    throw new Error(
+      `Not enough devnet SOL — you have ${(balance / 1e9).toFixed(4)} SOL, need ~0.015. ` +
+        `Get free SOL at faucet.solana.com`
+    );
+  }
+
+  // Use a styled placeholder image (no upload needed)
+  const imageUrl = `https://placehold.co/400x560/0d1a2e/eab308.png?text=${encodeURIComponent(
+    player.name + "\n" + score + "% Energy"
+  )}`;
+
   const metadata = {
     name: `World Cup Vibe: ${player.name}`,
     symbol: "WCVIBE",
     description: player.description,
-    image: imageDataUri,
+    image: imageUrl,
     attributes: [
       { trait_type: "Player", value: player.name },
       { trait_type: "Country", value: player.country },
@@ -26,35 +66,15 @@ function buildMetadataDataUri(player, score, imageDataUri) {
       { trait_type: "Energy Score", value: String(score) },
     ],
     properties: {
-      files: [{ uri: imageDataUri, type: "image/png" }],
+      files: [{ uri: imageUrl, type: "image/png" }],
       category: "image",
     },
   };
-  const json = JSON.stringify(metadata);
-  const b64 = btoa(unescape(encodeURIComponent(json)));
-  return `data:application/json;base64,${b64}`;
-}
 
-export async function mintNFT({ player, score, imageBlob, publicKey, wallet }) {
-  const connection = new Connection(clusterApiUrl("devnet"), "confirmed");
+  // Get a short HTTPS URL for the metadata (required by Token Metadata program)
+  const metadataUri = await uploadMetadataJson(metadata);
 
-  // Check SOL balance — need ~0.015 SOL for the mint transaction
-  const balance = await connection.getBalance(publicKey);
-  if (balance < 15_000_000) {
-    throw new Error(
-      `Insufficient devnet SOL. You have ${(balance / 1e9).toFixed(4)} SOL but need ~0.015. ` +
-        `Get free devnet SOL at faucet.solana.com`
-    );
-  }
-
-  // Convert canvas PNG to base64 data URI (safe chunked encode)
-  const ab = await imageBlob.arrayBuffer();
-  const imageDataUri = `data:image/png;base64,${uint8ToBase64(new Uint8Array(ab))}`;
-
-  // Build metadata URI (data URI stored on-chain — no external service required)
-  const metadataUri = buildMetadataDataUri(player, score, imageDataUri);
-
-  // Mint NFT on Solana devnet
+  // Mint on Solana devnet
   const metaplex = Metaplex.make(connection).use(
     walletAdapterIdentity(wallet.adapter)
   );
@@ -67,6 +87,5 @@ export async function mintNFT({ player, score, imageBlob, publicKey, wallet }) {
     isMutable: true,
   });
 
-  // response.signature is the transaction signature
   return response.signature;
 }
